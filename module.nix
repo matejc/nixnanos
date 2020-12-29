@@ -35,7 +35,7 @@ let
       vms = filterAttrs (n: v: v.packagename != null) cfg.vms;
       packages = map (v: {
         name = v.packagename;
-        value = fetchurl {
+        value = pkgs.fetchurl {
           url = "https://storage.googleapis.com/packagehub/${v.packagename}.tar.gz";
           sha256 = manifest."${v.packagename}".sha256;
         };
@@ -46,15 +46,37 @@ let
         ln -s "${manifestSrc}" "$out/manifest.json"
 
         ${concatMapStringsSep "\n" (v: ''
-          ln -s "${v.value}" "$out/${v.packagename}.tar.gz"
+          ln -s "${v.value}" "$out/${v.name}.tar.gz"
         '') packages}
       '';
 
-  services = mapAttrsToList (n: v:
+  mkReleaseDir =
     let
-      configFile = builtins.toFile "config.json" (builtins.toJSON v.configuration);
-    in setAttrByPath ["systemd" "services" "nanos-${n}"] {
+      nanosSrc = builtins.fetchurl {
+        url = "https://storage.googleapis.com/nanos/release/${cfg.version}/nanos-release-linux-${cfg.version}.tar.gz";
+      };
+    in
+      pkgs.runCommand "${cfg.version}" {
+        buildInputs = with pkgs; [ gnutar gzip patchelf ];
+      } ''
+        mkdir -p $out
+        tar xzf "${nanosSrc}" -C $out/
+        patchelf --set-interpreter "${pkgs.stdenv.cc.libc}/lib/ld-linux-x86-64.so.2" \
+          $out/mkfs
+      '';
+
+  services = mapAttrs' (n: v:
+    let
+      vmConfig = {
+        Boot = "/var/lib/nanos/.ops/${cfg.version}/boot.img";
+        Kernel = "/var/lib/nanos/.ops/${cfg.version}/kernel.img";
+        Mkfs = "/var/lib/nanos/.ops/${cfg.version}/mkfs";
+      } // v.configuration;
+      configFile = builtins.toFile "config.json" (builtins.toJSON vmConfig);
+    in nameValuePair "nanos-${n}" {
       description = "NanosVMS ${n} (${v.packagename})";
+      after = [ "nanos-bridge-net.service" ];
+      wantedBy = [ "multi-user.target" ];
       serviceConfig = {
         Type = "simple";
         User = "nanos";
@@ -65,7 +87,10 @@ let
         KillSignal = "SIGINT";
         TimeoutSec = 60;  # wait 1min untill SIGKILL
         ExecStart = "${cfg.ops.package}/bin/ops load ${v.packagename} -c ${configFile}";
+        Restart = "always";
+        RestartSec = 3;
       };
+      path = [ config.virtualisation.libvirtd.qemuPackage ];
     }
   ) cfg.vms;
 in
@@ -73,6 +98,12 @@ in
   options = {
     services.nanos = {
       enable = mkEnableOption "Enable NanoVMS";
+
+      version = mkOption {
+        type = types.str;
+        default = "0.1.30";
+        description = "Nanos release version";
+      };
 
       ops.package = mkOption {
         type = types.package;
@@ -105,8 +136,12 @@ in
 
     system.activationScripts.nanos-init.text = ''
       mkdir -p /var/lib/nanos/.ops
-      rm -f /var/lib/nanos/.ops/packages
+      chown -R nanos:nanos /var/lib/nanos
+      rm -f "/var/lib/nanos/.ops/packages"
       ln -s "${mkPackagesDir}" "/var/lib/nanos/.ops/packages"
+      rm -f "/var/lib/nanos/.ops/${cfg.version}"
+      ln -s "${mkReleaseDir}" "/var/lib/nanos/.ops/${cfg.version}"
     '';
-  } services);
+
+  } (setAttrByPath ["systemd" "services"] services));
 }
