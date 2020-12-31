@@ -22,6 +22,11 @@ let
         default = null;
         description = "List packages by running `ops pkg list`.";
       };
+      elf = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = "Elf executable.";
+      };
       configuration = mkOption {
         type = types.attrs;
         description = "VM config, will be passed as JSON to OPS (https://nanovms.gitbook.io/ops/configuration)";
@@ -72,9 +77,15 @@ let
         Kernel = "/var/lib/nanos/.ops/${cfg.version}/kernel.img";
         Mkfs = "/var/lib/nanos/.ops/${cfg.version}/mkfs";
       } // v.configuration;
-      configFile = builtins.toFile "config.json" (builtins.toJSON vmConfig);
+      configFile = pkgs.writeText "config.json" (builtins.toJSON vmConfig);
+      args =
+        assert asserts.assertMsg ((v.packagename != null) != (v.elf != null)) "Only one, elf or packagename can be defined";
+        if v.packagename == null then
+          "run ${v.elf}"
+        else
+          "load ${v.packagename}";
     in nameValuePair "nanos-${n}" {
-      description = "NanosVMS ${n} (${v.packagename})";
+      description = "NanosVMS ${n}";
       after = [ "nanos-bridge-net.service" ];
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
@@ -82,14 +93,16 @@ let
         User = "nanos";
         Group = "nanos";
         # mixed - first send SIGINT to main process,
-        # then after 2min send SIGKILL to whole group if neccessary
+        # then after 1min send SIGKILL to whole group if neccessary
         KillMode = "mixed";
         KillSignal = "SIGINT";
         TimeoutSec = 60;  # wait 1min untill SIGKILL
-        ExecStart = "${cfg.ops.package}/bin/ops load ${v.packagename} -c ${configFile}";
+        ExecStart = "${cfg.ops.package}/bin/ops ${args} -c ${configFile}";
         Restart = "always";
-        RestartSec = 3;
+        RestartSec = 1;
       };
+      startLimitIntervalSec = 10;
+      startLimitBurst = 5;
       path = [ config.virtualisation.libvirtd.qemuPackage ];
     }
   ) cfg.vms;
