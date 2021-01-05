@@ -7,15 +7,18 @@ Every VM is managed as a separate SystemD service.
 
 ## Examples
 
-This belongs into /etc/nixos/configuration.nix
+Import `module.nix` in the /etc/nixos/configuration.nix
 
 ```nix
   imports =
     [
-      ...
       <your path to nixnanos repository>/module.nix
     ];
+```
 
+Two example configurations.
+
+```nix
   services.nanos = {
     enable = true;
 
@@ -64,7 +67,5 @@ This belongs into /etc/nixos/configuration.nix
           RunConfig.Ports = [ "2022" ];
         };
       };
-  };
-
-  ...
+  }
 ```
